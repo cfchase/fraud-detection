@@ -165,7 +165,7 @@ spec:
           metadata:
             annotations:
               opendatahub.io/connection-type: s3
-              openshift.io/display-name: My Storage
+              openshift.io/display-name: Data Storage
             labels:
               opendatahub.io/dashboard: "true"
               opendatahub.io/managed: "true"
@@ -176,26 +176,6 @@ spec:
           stringData:
             AWS_DEFAULT_REGION: us-east-1
             AWS_S3_BUCKET: my-storage
-            AWS_S3_ENDPOINT: ${MINIO_HOST}
-          type: Opaque
-          EOF
-          cat << EOF | oc apply -f-
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            annotations:
-              opendatahub.io/connection-type: s3
-              openshift.io/display-name: Pipeline Artifacts
-            labels:
-              opendatahub.io/dashboard: "true"
-              opendatahub.io/managed: "true"
-            name: aws-connection-pipeline-artifacts
-          data:
-            AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-            AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-          stringData:
-            AWS_DEFAULT_REGION: us-east-1
-            AWS_S3_BUCKET: pipeline-artifacts
             AWS_S3_ENDPOINT: ${MINIO_HOST}
           type: Opaque
           EOF

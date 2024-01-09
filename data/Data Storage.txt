@@ -1,0 +1,8 @@
+Data Storage
+ZE-PzOXIqUTrGTyH
+UdczWL8gXxutzZ6qkV2wxDuvbp985tAK
+https://ceph-storage.rhoai-internal.com
+us-east-1
+data-storage
+
+Fraud Detection
