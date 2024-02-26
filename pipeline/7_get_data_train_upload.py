@@ -28,7 +28,7 @@ upload_model_component = create_component_from_func(
 )
 
 
-@kfp.dsl.pipeline(name="train_upload_stock_kfp")
+@kfp.dsl.pipeline(name="train_upload_fraud_kfp")
 def sdk_pipeline():
     get_data_task = get_data_component()
     csv_file = get_data_task.output

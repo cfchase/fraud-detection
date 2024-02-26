@@ -1,7 +1,7 @@
 apiVersion: tekton.dev/v1beta1
 kind: PipelineRun
 metadata:
-  name: train-upload-stock-kfp
+  name: train-upload-fraud-kfp
   annotations:
     tekton.dev/output_artifacts: '{"get-data": [{"key": "artifacts/$PIPELINERUN/get-data/output.tgz",
       "name": "get-data-output", "path": "/tmp/outputs/output/data"}], "train-model":
@@ -18,7 +18,7 @@ metadata:
     sidecar.istio.io/inject: "false"
     tekton.dev/template: ''
     pipelines.kubeflow.org/big_data_passing_format: $(workspaces.$TASK_NAME.path)/artifacts/$ORIG_PR_NAME/$TASKRUN_NAME/$TASK_PARAM_NAME
-    pipelines.kubeflow.org/pipeline_spec: '{"name": "train_upload_stock_kfp"}'
+    pipelines.kubeflow.org/pipeline_spec: '{"name": "train_upload_fraud_kfp"}'
   labels:
     pipelines.kubeflow.org/pipelinename: ''
     pipelines.kubeflow.org/generation: ''
@@ -117,7 +117,7 @@ spec:
         - name: get-data
       workspaces:
       - name: get-data
-        workspace: train-upload-stock-kfp
+        workspace: train-upload-fraud-kfp
     - name: train-model
       params:
       - name: get-data-trname
@@ -302,7 +302,7 @@ spec:
         - name: train-model
       workspaces:
       - name: train-model
-        workspace: train-upload-stock-kfp
+        workspace: train-upload-fraud-kfp
       runAfter:
       - get-data
     - name: upload
@@ -384,13 +384,13 @@ spec:
         - name: upload
       workspaces:
       - name: upload
-        workspace: train-upload-stock-kfp
+        workspace: train-upload-fraud-kfp
       runAfter:
       - train-model
     workspaces:
-    - name: train-upload-stock-kfp
+    - name: train-upload-fraud-kfp
   workspaces:
-  - name: train-upload-stock-kfp
+  - name: train-upload-fraud-kfp
     volumeClaimTemplate:
       spec:
         accessModes:
