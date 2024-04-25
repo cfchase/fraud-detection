@@ -30,10 +30,20 @@ upload_model_component = create_component_from_func(
 
 @kfp.dsl.pipeline(name="train_upload_stock_kfp")
 def sdk_pipeline():
+    gpu_toleration = V1Toleration(effect='NoSchedule',
+                                  key='nvidia.com/gpu',
+                                  operator='Exists')
+
+
     get_data_task = get_data_component()
     csv_file = get_data_task.output
     train_model_task = train_model_component(csv_file)
     onnx_file = train_model_task.output
+
+    train_model_task.add_toleration(gpu_toleration)
+    train_model_task.add_resource_request('nvidia.com/gpu', "1")
+    train_model_task.add_resource_limit('nvidia.com/gpu', "1")
+
     upload_model_task = upload_model_component(onnx_file)
 
     upload_model_task.add_env_variable(V1EnvVar(

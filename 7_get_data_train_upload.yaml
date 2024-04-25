@@ -242,6 +242,11 @@ spec:
 
             _outputs = train_model(**_parsed_args)
           image: quay.io/modh/runtime-images:runtime-cuda-tensorflow-ubi9-python-3.9-2023a-20230817-b7e647e
+          resources:
+            limits:
+              nvidia.com/gpu: '1'
+            requests:
+              nvidia.com/gpu: '1'
           env:
           - name: ORIG_PR_NAME
             valueFrom:
@@ -389,6 +394,13 @@ spec:
       - train-model
     workspaces:
     - name: train-upload-stock-kfp
+  taskRunSpecs:
+  - pipelineTaskName: train-model
+    taskPodTemplate:
+      tolerations:
+      - effect: NoSchedule
+        key: nvidia.com/gpu
+        operator: Exists
   workspaces:
   - name: train-upload-stock-kfp
     volumeClaimTemplate:
