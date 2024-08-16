@@ -1,32 +1,30 @@
 import os
 import boto3
 import botocore
-import ray
-import tensorflow as tf
+import pyarrow
+import pyarrow.fs
+import pyarrow.csv
 
+import tensorflow as tf
+import onnx
+import tf2onnx
 from keras.models import Sequential
 from keras.layers import Dense, Dropout, BatchNormalization, Activation
+
+import ray
 from ray import train
 from ray.train import RunConfig, ScalingConfig
 from ray.train.tensorflow import TensorflowTrainer
 from ray.train.tensorflow.keras import ReportCheckpointCallback
 from ray.data.preprocessors import Concatenator
 
-import pyarrow
-import pyarrow.fs
-import pyarrow.csv
-
-a = 5
-b = 10
-size = 100
-
 device = "cpu"
 use_gpu = False
-num_epochs = 4
+num_epochs = 2
 batch_size = 64
 learning_rate = 1e-3
 bucket_name = os.environ.get("AWS_S3_BUCKET")
-state_dict_filename = "model.pth"
+keras_model_filename = "model.keras"
 onnx_model_filename = "model.onnx"
 output_column_name = "features"
 
@@ -136,11 +134,28 @@ def train_func(config: dict):
     return results
 
 
+def save_onnx_model(checkpoint_path):
+    s3_resource = get_s3_resource()
+    bucket = s3_resource.Bucket(bucket_name)
+
+    cp_s3_key = checkpoint_path.removeprefix(f"{bucket_name}/") + "/" + keras_model_filename
+    keras_model_local = f"/tmp/{keras_model_filename}"
+    print(f"Downloading model state_dict from {cp_s3_key} to {keras_model_local}")
+    bucket.download_file(cp_s3_key, keras_model_local)
+    keras_model = tf.keras.models.load_model(keras_model_local)
+    onnx_model_local = f"/tmp/{onnx_model_filename}"
+    onnx_model, _ = tf2onnx.convert.from_keras(keras_model)
+    onnx.save(onnx_model, onnx_model_local)
+
+    upload_path = os.environ.get("MODEL_OUTPUT")
+    onnx_s3_key = os.path.join(upload_path, onnx_model_filename)
+    print(f"Uploading model from {onnx_model_local} to {onnx_s3_key}")
+    bucket.upload_file(onnx_model_local, onnx_s3_key)
+
+
 pyarrow_fs = get_fs()
 
-
 config = {"lr": learning_rate, "batch_size": batch_size, "epochs": num_epochs}
-
 
 train_dataset = ray.data.read_csv(filesystem=pyarrow_fs,
                                   paths=f"s3://{bucket_name}/data/train.csv")
@@ -164,5 +179,5 @@ trainer = TensorflowTrainer(
     datasets={"train": train_dataset},
 )
 result = trainer.fit()
-print(result.metrics)
-print(result.metrics)
+
+save_onnx_model(result.checkpoint.path)
