@@ -142,15 +142,33 @@ def train_func(config: dict):
     return results
 
 
+def create_sklearn_standard_scaler(scaler):
+    sk_scaler = sklearn.preprocessing.StandardScaler()
+    mean = []
+    std = []
+
+    for column in feature_columns:
+        mean.append(scaler.stats_[f"mean({column})"])
+        std.append(scaler.stats_[f"std({column})"])
+
+    sk_scaler.mean_ = np.array(mean)
+    sk_scaler.scale_ = np.array(std)
+    sk_scaler.var_ = sk_scaler.scale_ ** 2
+
+    return sk_scaler
+
+
 def save_scalar(scaler):
     s3_resource = get_s3_resource()
     bucket = s3_resource.Bucket(bucket_name)
-    scaler_filename = "/tmp/scaler.pkl"
-    with open(scaler_filename, "wb") as f:
-        pickle.dump(scaler, f)
+    sklearn_scaler = create_sklearn_standard_scaler(scaler)
 
-    print(f"Uploading scaler from {scaler_filename} to {scaler_output}")
-    bucket.upload_file(scaler_filename, scaler_output)
+    sk_scaler_filename = "/tmp/scaler.pkl"
+    with open(sk_scaler_filename, "wb") as f:
+        pickle.dump(sklearn_scaler, f)
+
+    print(f"Uploading scaler from {sk_scaler_filename} to {scaler_output}")
+    bucket.upload_file(sk_scaler_filename, scaler_output)
 
 
 def save_onnx_model(checkpoint_path):
