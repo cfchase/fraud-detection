@@ -1,6 +1,8 @@
 import os
+import pickle
 import boto3
 import botocore
+
 import pyarrow
 import pyarrow.fs
 import pyarrow.csv
@@ -16,16 +18,13 @@ from ray import train
 from ray.train import RunConfig, ScalingConfig
 from ray.train.tensorflow import TensorflowTrainer
 from ray.train.tensorflow.keras import ReportCheckpointCallback
-from ray.data.preprocessors import Concatenator
+from ray.data.preprocessors import Concatenator, StandardScaler
 
-device = "cpu"
-use_gpu = False
-num_epochs = 2
-batch_size = 64
+use_gpu = os.environ.get("USE_GPU", "False").lower() == "true"
+num_workers = int(os.environ.get("NUM_WORKERS", "1"))
+num_epochs = int(os.environ.get("NUM_EPOCHS", "2"))
+batch_size = int(os.environ.get("BATCH_SIZE", "64"))
 learning_rate = 1e-3
-bucket_name = os.environ.get("AWS_S3_BUCKET")
-keras_model_filename = "model.keras"
-onnx_model_filename = "model.onnx"
 output_column_name = "features"
 
 feature_columns = [
@@ -40,25 +39,21 @@ label_columns = [
     "fraud",
 ]
 
-feature_indexes = [
-    1,  # distance_from_last_transaction
-    2,  # ratio_to_median_purchase_price
-    4,  # used_chip
-    5,  # used_pin_number
-    6,  # online_order
-]
+aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID")
+aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+endpoint_url = os.environ.get("AWS_S3_ENDPOINT")
+region_name = os.environ.get("AWS_DEFAULT_REGION")
+bucket_name = os.environ.get("AWS_S3_BUCKET")
+train_data = os.environ.get("TRAIN_DATA", "data/train.csv")
 
-label_indexes = [
-    7  # fraud
-]
+keras_model_filename = "model.keras"
+model_output_prefix = os.environ.get("MODEL_OUTPUT", "models/fraud/1/")
+model_output_filename = os.environ.get("MODEL_OUTPUT_FILENAME", "model.onnx")
+scaler_output = model_output_prefix + "scaler.pkl"
+model_output = model_output_prefix + model_output_filename
 
 
-def get_fs():
-    aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID")
-    aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
-    endpoint_url = os.environ.get("AWS_S3_ENDPOINT")
-    region_name = os.environ.get("AWS_DEFAULT_REGION" )
-
+def get_pyarrow_fs():
     return pyarrow.fs.S3FileSystem(
         access_key=aws_access_key_id,
         secret_key=aws_secret_access_key,
@@ -67,13 +62,9 @@ def get_fs():
 
 
 def get_s3_resource():
-    aws_access_key_id = os.environ.get('AWS_ACCESS_KEY_ID')
-    aws_secret_access_key = os.environ.get('AWS_SECRET_ACCESS_KEY')
-    endpoint_url = os.environ.get('AWS_S3_ENDPOINT')
-    region_name = os.environ.get('AWS_DEFAULT_REGION')
-
-    session = boto3.session.Session(aws_access_key_id=aws_access_key_id,
-                                    aws_secret_access_key=aws_secret_access_key)
+    session = boto3.session.Session(
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key)
 
     s3_resource = session.resource(
         's3',
@@ -86,7 +77,7 @@ def get_s3_resource():
 
 def build_model() -> tf.keras.Model:
     model = Sequential()
-    model.add(Dense(32, activation = 'relu', input_dim = len(feature_columns)))
+    model.add(Dense(32, activation='relu', input_dim=len(feature_columns)))
     model.add(Dropout(0.2))
     model.add(Dense(32))
     model.add(BatchNormalization())
@@ -96,9 +87,7 @@ def build_model() -> tf.keras.Model:
     model.add(BatchNormalization())
     model.add(Activation('relu'))
     model.add(Dropout(0.2))
-    model.add(Dense(1, activation = 'sigmoid'))
-    # model.compile(optimizer='adam',loss='binary_crossentropy',metrics=['accuracy'])
-    # model.summary()
+    model.add(Dense(1, activation='sigmoid'))
     return model
 
 
@@ -108,17 +97,16 @@ def train_func(config: dict):
 
     strategy = tf.distribute.MultiWorkerMirroredStrategy()
     with strategy.scope():
-        # Model building/compiling need to be within `strategy.scope()`.
         multi_worker_model = build_model()
         multi_worker_model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=config.get("lr", 1e-3)),
-            loss=tf.keras.losses.binary_crossentropy,
+            optimizer="adam",
+            loss="binary_crossentropy",
             metrics=["accuracy"],
         )
 
     dataset = train.get_dataset_shard("train")
-
     results = []
+
     for epoch in range(epochs):
         print(f"Epoch: {epoch}")
         tf_dataset = dataset.to_tf(
@@ -134,38 +122,48 @@ def train_func(config: dict):
     return results
 
 
+def save_scalar(scaler):
+    s3_resource = get_s3_resource()
+    bucket = s3_resource.Bucket(bucket_name)
+    scaler_filename = "/tmp/scaler.pkl"
+    with open(scaler_filename, "wb") as f:
+        pickle.dump(scaler, f)
+
+    print(f"Uploading scaler from {scaler_filename} to {scaler_output}")
+    bucket.upload_file(scaler_filename, scaler_output)
+
+
 def save_onnx_model(checkpoint_path):
     s3_resource = get_s3_resource()
     bucket = s3_resource.Bucket(bucket_name)
 
     cp_s3_key = checkpoint_path.removeprefix(f"{bucket_name}/") + "/" + keras_model_filename
     keras_model_local = f"/tmp/{keras_model_filename}"
+
     print(f"Downloading model state_dict from {cp_s3_key} to {keras_model_local}")
     bucket.download_file(cp_s3_key, keras_model_local)
     keras_model = tf.keras.models.load_model(keras_model_local)
-    onnx_model_local = f"/tmp/{onnx_model_filename}"
+    onnx_model_local = f"/tmp/model.onnx"
     onnx_model, _ = tf2onnx.convert.from_keras(keras_model)
     onnx.save(onnx_model, onnx_model_local)
 
-    upload_path = os.environ.get("MODEL_OUTPUT")
-    onnx_s3_key = os.path.join(upload_path, onnx_model_filename)
-    print(f"Uploading model from {onnx_model_local} to {onnx_s3_key}")
-    bucket.upload_file(onnx_model_local, onnx_s3_key)
+    print(f"Uploading model from {onnx_model_local} to {model_output}")
+    bucket.upload_file(onnx_model_local, model_output)
 
 
-pyarrow_fs = get_fs()
+pyarrow_fs = get_pyarrow_fs()
 
 config = {"lr": learning_rate, "batch_size": batch_size, "epochs": num_epochs}
 
-train_dataset = ray.data.read_csv(filesystem=pyarrow_fs,
-                                  paths=f"s3://{bucket_name}/data/train.csv")
-preprocessor = Concatenator(include=feature_columns, output_column_name=output_column_name)
-train_dataset = preprocessor.transform(train_dataset)
+train_dataset = ray.data.read_csv(
+    filesystem=pyarrow_fs,
+    paths=f"s3://{bucket_name}/{train_data}")
+scaler = StandardScaler(columns=feature_columns)
+concatenator = Concatenator(include=feature_columns, output_column_name=output_column_name)
+train_dataset = scaler.fit_transform(train_dataset)
+train_dataset = concatenator.fit_transform(train_dataset)
 
-
-print(train_dataset.schema())
-
-scaling_config = ScalingConfig(num_workers=2, use_gpu=use_gpu)
+scaling_config = ScalingConfig(num_workers=num_workers, use_gpu=use_gpu)
 
 trainer = TensorflowTrainer(
     train_loop_per_worker=train_func,
@@ -177,7 +175,12 @@ trainer = TensorflowTrainer(
     ),
     scaling_config=scaling_config,
     datasets={"train": train_dataset},
+    metadata={"preprocessor_pkl": scaler.serialize()},
 )
 result = trainer.fit()
+metadata = result.checkpoint.get_metadata()
+print(metadata)
+print(StandardScaler.deserialize(metadata["preprocessor_pkl"]))
 
+save_scalar(scaler)
 save_onnx_model(result.checkpoint.path)
