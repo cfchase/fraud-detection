@@ -7,6 +7,9 @@ import pyarrow
 import pyarrow.fs
 import pyarrow.csv
 
+import sklearn
+import numpy as np
+
 import tensorflow as tf
 import onnx
 import tf2onnx
@@ -74,6 +77,21 @@ def get_s3_resource():
 
     return s3_resource
 
+def get_class_weights(pyarrow_fs):
+    with pyarrow_fs.open_input_file(f"{bucket_name}/{train_data}") as file:
+        training_table = pyarrow.csv.read_csv(file)
+
+    y_train = training_table.to_pandas()
+    y_train = y_train.loc[:, label_columns]
+    # Since the dataset is unbalanced (it has many more non-fraud transactions than fraudulent ones), set a class weight to weight the few fraudulent transactions higher than the many non-fraud transactions.
+    class_weights = sklearn.utils.class_weight.compute_class_weight(
+        'balanced',
+        classes=np.unique(y_train),
+        y=y_train.values.ravel())
+    class_weights = {i : class_weights[i] for i in range(len(class_weights))}
+
+    return class_weights
+
 
 def build_model() -> tf.keras.Model:
     model = Sequential()
@@ -94,6 +112,7 @@ def build_model() -> tf.keras.Model:
 def train_func(config: dict):
     batch_size = config.get("batch_size", 64)
     epochs = config.get("epochs", 3)
+    cw = config.get("class_weight", 3)
 
     strategy = tf.distribute.MultiWorkerMirroredStrategy()
     with strategy.scope():
@@ -116,6 +135,7 @@ def train_func(config: dict):
         )
         history = multi_worker_model.fit(
             tf_dataset,
+            class_weight=cw,
             callbacks=[ReportCheckpointCallback()]
         )
         results.append(history.history)
@@ -152,8 +172,9 @@ def save_onnx_model(checkpoint_path):
 
 
 pyarrow_fs = get_pyarrow_fs()
+class_weights = get_class_weights(pyarrow_fs)
 
-config = {"lr": learning_rate, "batch_size": batch_size, "epochs": num_epochs}
+config = {"lr": learning_rate, "batch_size": batch_size, "epochs": num_epochs, "class_weight":class_weights}
 
 train_dataset = ray.data.read_csv(
     filesystem=pyarrow_fs,
@@ -162,6 +183,8 @@ scaler = StandardScaler(columns=feature_columns)
 concatenator = Concatenator(include=feature_columns, output_column_name=output_column_name)
 train_dataset = scaler.fit_transform(train_dataset)
 train_dataset = concatenator.fit_transform(train_dataset)
+
+print(scaler.stats_)
 
 scaling_config = ScalingConfig(num_workers=num_workers, use_gpu=use_gpu)
 
