@@ -139,6 +139,7 @@ def train_func(config: dict):
             callbacks=[ReportCheckpointCallback()]
         )
         results.append(history.history)
+
     return results
 
 
