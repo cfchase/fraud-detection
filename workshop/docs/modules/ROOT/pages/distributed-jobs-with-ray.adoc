@@ -5,6 +5,8 @@ We've trained this model several ways now, directly in a notebook, in a pipeline
 
 In your notebook environment, open the `8_distributed_training.ipynb` file and follow the instructions directly in the notebook. The instructions guide you through some authentication, creating Ray clusters, and working with jobs.
 
+If you'd like to take a closer look at the python code that you'll be running, you can find it in the ray-scripts directory `ray-scripts/train_tf_cpu.py`.  For more information about TensorFlow training on Ray, chack out the https://docs.ray.io/en/latest/train/distributed-tensorflow-keras.html[Ray TensorFlow guide]
+
 image::distributed/jupyter-notebook.png[Jupyter Notebook]
 
 .Next step
